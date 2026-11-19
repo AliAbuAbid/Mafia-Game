@@ -528,3 +528,17 @@ test("طلبات غلط ما بتوقّع السيرفر", async () => {
   const ok = await client();
   assert.ok((await call(ok, "create")).ok, "server still alive");
 });
+
+test("الحكم بيسكّر الغرفة والكل بيطلع", async () => {
+  const g = await dealt(4, ONLY_MAFIA(1));
+  let closed = 0;
+  g.ps.forEach((p) => p.on("closed", () => closed++));
+  assert.equal((await call(g.ps[0], "closeRoom")).error, "مش مسموح هلأ");
+  assert.ok((await call(g.host, "closeRoom")).ok);
+  for (let i = 0; i < 40 && closed < 4; i++) await wait(15);
+  assert.equal(closed, 4, "every player is told");
+  assert.equal((await call(g.host, "resume", { code: g.code })).error, "gone");
+  assert.equal((await call(g.ps[0], "resume", { code: g.code })).error, "gone");
+  const p = await client();
+  assert.match((await call(p, "join", { code: g.code, name: "جديد" })).error, /ما في غرفة/);
+});

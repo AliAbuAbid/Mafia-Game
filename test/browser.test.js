@@ -228,6 +228,32 @@ const ok = (cond, msg) => { assert.ok(cond, msg); checks.push(msg); };
     await ps[2].click("#leaveBtn"); await settle(host, 300);
     ok((await host.$$("#hPlayers li")).length === 6, "اللي غادر انشال من القائمة");
 
+    // ---------- going home on purpose sticks, even after reload
+    await host.click("#homeBtn"); await host.waitForSelector("#vHome:not([hidden])");
+    ok(true, "زر الصفحة الرئيسية بيرجّع الحكم");
+    await host.reload(); await host.waitForSelector("#vHome:not([hidden])"); await settle(host, 400);
+    ok(await host.isVisible("#vHome") && !(await host.isVisible("#vRoom")), "بعد التحديث بيضل بالصفحة الرئيسية");
+    ok((await host.textContent("#resumeBtn")).includes(code), "زر ارجع لغرفتك فيه الكود");
+    await host.click("#resumeBtn"); await host.waitForSelector("#hostPanel:not([hidden])");
+    ok(true, "الحكم رجع لغرفته من الزر");
+    await ps[3].click("#homeBtn"); await ps[3].reload(); await ps[3].waitForSelector("#vHome:not([hidden])"); await settle(ps[3], 300);
+    ok(!(await ps[3].isVisible("#vRoom")), "اللاعب كمان بيضل بالرئيسية بعد التحديث");
+
+    // ---------- refresh while in the room still drops you back in
+    await ps[0].reload(); await ps[0].waitForSelector("#playerPanel:not([hidden])");
+    ok(true, "تحديث الصفحة وإنت بالغرفة بيرجعك عليها");
+
+    // ---------- host closes the room
+    await host.click("#closeBtn"); await host.click("#closeYes"); await host.waitForSelector("#vHome:not([hidden])");
+    ok(await host.isHidden("#resumeBtn"), "بعد ما الحكم سكّر ما في زر رجوع");
+    await ps[0].waitForSelector("#vHome:not([hidden])");
+    ok((await ps[0].textContent("#toast")).includes("سكّر الغرفة"), "اللاعبين وصلهم إنه الغرفة انسكّرت");
+    await ps[0].reload(); await ps[0].waitForSelector("#vHome:not([hidden])"); await settle(ps[0], 300);
+    ok(!(await ps[0].isVisible("#vRoom")) && await ps[0].isHidden("#resumeBtn"), "بعد التسكير ما بيرجع على الغرفة");
+    await host.click("#createBtn"); await host.waitForSelector("#hostLobby:not([hidden])");
+    ok((await host.textContent("#roomCode")).trim() !== code, "بيقدر يفتح غرفة جديدة بكود جديد");
+    await host.click("#homeBtn");
+
     // ---------- desktop width
     await host.setViewportSize({ width: 1280, height: 900 });
     await noOverflow(host, "شاشة كمبيوتر");

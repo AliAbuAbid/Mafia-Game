@@ -407,6 +407,21 @@ io.on("connection", (socket) => {
     reply(cb, { ok: true });
   });
 
+  // الحكم بيسكّر الغرفة: الكل بيرجع للصفحة الرئيسية والغرفة بتنمسح
+  on("closeRoom", (_d, cb) => {
+    const room = hostRoom(socket);
+    if (!room) return reply(cb, NO);
+    for (const sid of room.sockets.keys()) {
+      const s = io.sockets.sockets.get(sid);
+      if (!s) continue;
+      if (sid !== socket.id) s.emit("closed");
+      s.leave(room.code);
+      s.data.code = null;
+    }
+    rooms.delete(room.code);
+    reply(cb, { ok: true });
+  });
+
   // ----- player actions -----
   const validTarget = (room, id) => alive(room.players.get(id));
 

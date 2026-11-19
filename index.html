@@ -185,6 +185,7 @@ li.out .nm,.struck{text-decoration:line-through;text-decoration-color:var(--dang
       <div class="row">
         <span class="pill" id="statusPill"></span>
         <button class="btn sm" id="copyBtn" type="button">انسخ رابط الغرفة</button>
+        <button class="btn sm" id="homeBtn" type="button">→ الصفحة الرئيسية</button>
       </div>
     </div>
 
@@ -249,6 +250,13 @@ li.out .nm,.struck{text-decoration:line-through;text-decoration-color:var(--dang
             <p>رح ترجع الكل لصفحة الانتظار، وتنمسح الشخصيات والإقصاءات عشان توزعوا من جديد. اللاعبين بضلوا بالغرفة.</p>
             <div class="row"><button class="btn danger fill" id="endYes" type="button">نعم، أنهِ اللفة</button><button class="btn" id="endNo" type="button">إلغاء</button></div>
           </div>
+        </div>
+      </div>
+      <div class="panel">
+        <button class="btn danger" id="closeBtn" type="button">سكّر الغرفة نهائياً</button>
+        <div class="confirm" id="closeConfirm" hidden>
+          <p>الغرفة رح تنمسح، والكل بيرجع للصفحة الرئيسية. إذا بدكم تلعبوا كمان، لازم تفتح غرفة جديدة بكود جديد.</p>
+          <div class="row"><button class="btn danger fill" id="closeYes" type="button">نعم، سكّرها</button><button class="btn" id="closeNo" type="button">إلغاء</button></div>
         </div>
       </div>
     </div>
@@ -365,7 +373,7 @@ socket.on("connect", async () => {
   if(code){
     const r = await call("resume", {clientId, code});
     if(r.ok){ S.code=r.code; show("vRoom"); return; }
-    ls.del("mafia_room");
+    ls.del("mafia_room"); ls.del("mafia_last");
     if(S.code){ toast("الغرفة انتهت أو انطلعت منها"); }
     S.code=null; S.state=null;
   }
@@ -386,15 +394,20 @@ socket.on("state", st => {
   maybeAnnounce(st);
 });
 
+// "mafia_room" = the room to drop you back into after a refresh or a lost connection.
+// "mafia_last" = the room the home page offers to go back to. Going home on purpose clears the first, keeps the second.
 function goHome(tellServer=true){
   if(tellServer && S.code) socket.emit("home");
   S.code=null; S.state=null;
+  ls.del("mafia_room");
+  $("overlay").hidden = true;
   show("vHome"); $("meLabel").textContent="";
-  const last = ls.get("mafia_room");
-  $("resumeBtn").hidden = true;
-  if(last && !S.code){ $("resumeBtn").hidden=false; $("resumeBtn").textContent = "ارجع لغرفتك "+last; }
+  const last = ls.get("mafia_last");
+  $("resumeBtn").hidden = !last;
+  if(last) $("resumeBtn").textContent = "ارجع لغرفتك "+last;
 }
-function enter(code){ S.code=code; ls.set("mafia_room",code); $("roomCode").textContent=code; show("vRoom"); render(); history.replaceState(null,"",location.pathname); }
+socket.on("closed", () => { ls.del("mafia_last"); goHome(false); toast("الحكم سكّر الغرفة"); });
+function enter(code){ S.code=code; ls.set("mafia_room",code); ls.set("mafia_last",code); $("roomCode").textContent=code; show("vRoom"); render(); history.replaceState(null,"",location.pathname); }
 
 // ---------- home ----------
 $("codeIn").addEventListener("input", e => { e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g,""); });
@@ -417,11 +430,20 @@ $("createBtn").onclick = async () => {
   enter(r.code);
 };
 $("resumeBtn").onclick = async () => {
-  const c = ls.get("mafia_room"); if(!c) return;
+  const c = ls.get("mafia_last"); if(!c) return;
   const r = await call("resume",{clientId, code:c});
-  if(r.ok) enter(r.code); else { ls.del("mafia_room"); $("resumeBtn").hidden=true; toast("الغرفة هاي ما عادت موجودة"); }
+  if(r.ok) enter(r.code); else { ls.del("mafia_last"); $("resumeBtn").hidden=true; toast("الغرفة هاي ما عادت موجودة"); }
 };
 $("brandBtn").onclick = () => goHome();
+$("homeBtn").onclick = () => goHome();
+$("closeBtn").onclick = () => { $("closeConfirm").hidden=false; $("closeBtn").hidden=true; };
+$("closeNo").onclick = () => { $("closeConfirm").hidden=true; $("closeBtn").hidden=false; };
+$("closeYes").onclick = async () => {
+  $("closeYes").disabled=true; const r = await call("closeRoom"); $("closeYes").disabled=false;
+  $("closeConfirm").hidden=true; $("closeBtn").hidden=false;
+  if(r.error) return toast(r.error);
+  ls.del("mafia_last"); goHome(false); toast("انسكّرت الغرفة");
+};
 
 $("copyBtn").onclick = async () => {
   const link = location.origin + location.pathname + "?room=" + S.code;
@@ -622,7 +644,7 @@ async function setRoles(roles){ S.state.roles = roles; render(); const r = await
 document.addEventListener("click", async e => {
   const t = e.target.closest("button,[data-flip]"); if(!t) return;
   const ds = t.dataset;
-  if(ds.home){ ls.del("mafia_room"); goHome(); return; }
+  if(ds.home){ ls.del("mafia_last"); goHome(); return; }
   if(ds.hide){ S.hideCard=true; render(); return; }
   if(ds.flip){ S.hideCard=false; render(); return; }
   const send = async (ev, data) => { t.disabled=true; const r=await call(ev,data); t.disabled=false; if(r.error) toast(r.error); return r; };
@@ -666,7 +688,7 @@ $("mChatForm").addEventListener("submit", async e => {
   const box=$("mChat"); box.scrollTop=box.scrollHeight;
 });
 $("ovOk").onclick = () => { $("overlay").hidden = true; };
-$("leaveBtn").onclick = async () => { await call("leave"); ls.del("mafia_room"); S.code=null; goHome(false); };
+$("leaveBtn").onclick = async () => { await call("leave"); ls.del("mafia_last"); goHome(false); };
 })();
 
 </script>
