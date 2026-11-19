@@ -170,7 +170,7 @@ function viewFor(room, clientId) {
     const a = room.actions.get(me.id);
     base.myAction = a ? { targetId: a.targetId, target: nameOf(room, a.targetId), reply: a.reply || null } : null;
     base.myVote = room.votes.get(me.id) || null;
-    if (r.team === "mafia") base.mafia = mafiaView(room);
+    if (r.team === "mafia" && !me.out) base.mafia = mafiaView(room); // اللي انطرد بيطلع من غرفة المافيا
   } else {
     base.myRole = null;
   }
@@ -218,6 +218,19 @@ function playerCtx(socket) {
   return { room, me };
 }
 
+// someone left or was removed: drop everything they had, and see if that settles the game
+function removePlayer(room, id) {
+  const p = room.players.get(id);
+  if (!p) return;
+  room.players.delete(id);
+  room.votes.delete(id);
+  room.actions.delete(id);
+  room.mafia.votes.delete(id);
+  if (room.mafia.final?.by === id) room.mafia.final = null;
+  if (room.status === "playing" && p.role && !p.out && !room.winner)
+    room.winner = computeWinner(room, room.phase !== "night");
+}
+
 function sanitizeRoles(list) {
   if (!Array.isArray(list)) return null;
   return list.slice(0, 30).map((r, i) => ({
@@ -231,10 +244,17 @@ function sanitizeRoles(list) {
 }
 
 io.on("connection", (socket) => {
+  // every event goes through here: a bad payload or a bug in one handler must never take the server down
+  const on = (ev, fn) => socket.on(ev, (data, cb) => {
+    if (typeof data === "function") { cb = data; data = {}; }
+    if (!data || typeof data !== "object" || Array.isArray(data)) data = {};
+    try { fn(data, typeof cb === "function" ? cb : undefined); }
+    catch (e) { console.error("handler error", ev, e); if (typeof cb === "function") cb({ error: "صار خطأ، جرّب كمان مرة." }); }
+  });
   const reply = (cb, data) => typeof cb === "function" && cb(data);
   const NO = { error: "مش مسموح هلأ" };
 
-  socket.on("create", ({ clientId } = {}, cb) => {
+  on("create", ({ clientId } = {}, cb) => {
     if (!validId(clientId)) return reply(cb, { error: "معرّف غير صالح، حدّث الصفحة." });
     const code = newCode();
     const room = {
@@ -249,7 +269,7 @@ io.on("connection", (socket) => {
     broadcast(room);
   });
 
-  socket.on("join", ({ clientId, code, name } = {}, cb) => {
+  on("join", ({ clientId, code, name } = {}, cb) => {
     if (!validId(clientId)) return reply(cb, { error: "معرّف غير صالح، حدّث الصفحة." });
     code = clean(code, 5).toUpperCase();
     name = clean(name, 24);
@@ -257,6 +277,8 @@ io.on("connection", (socket) => {
     if (!room) return reply(cb, { error: "ما في غرفة بهذا الكود. تأكد منه." });
     if (room.hostId !== clientId) {
       if (!name) return reply(cb, { error: "اكتب اسمك أول." });
+      const taken = [...room.players.values()].some((p) => p.id !== clientId && p.name.toLowerCase() === name.toLowerCase());
+      if (taken) return reply(cb, { error: "في لاعب بنفس الاسم بالغرفة. اختار اسم ثاني." });
       const existing = room.players.get(clientId);
       if (existing) existing.name = name;
       else {
@@ -269,7 +291,7 @@ io.on("connection", (socket) => {
     broadcast(room);
   });
 
-  socket.on("resume", ({ clientId, code } = {}, cb) => {
+  on("resume", ({ clientId, code } = {}, cb) => {
     const room = rooms.get(clean(code, 5).toUpperCase());
     if (!validId(clientId) || !room || (room.hostId !== clientId && !room.players.has(clientId)))
       return reply(cb, { error: "gone" });
@@ -278,20 +300,17 @@ io.on("connection", (socket) => {
     broadcast(room);
   });
 
-  socket.on("leave", (_d, cb) => {
+  on("leave", (_d, cb) => {
     const room = rooms.get(socket.data.code);
-    if (room && room.hostId !== socket.data.clientId) {
-      room.players.delete(socket.data.clientId);
-      room.votes.delete(socket.data.clientId);
-    }
+    if (room && room.hostId !== socket.data.clientId) removePlayer(room, socket.data.clientId);
     detach(socket);
     reply(cb, { ok: true });
   });
 
-  socket.on("home", (_d, cb) => { detach(socket); reply(cb, { ok: true }); });
+  on("home", (_d, cb) => { detach(socket); reply(cb, { ok: true }); });
 
   // ----- host actions -----
-  socket.on("setRoles", ({ roles } = {}, cb) => {
+  on("setRoles", ({ roles } = {}, cb) => {
     const room = hostRoom(socket);
     const list = sanitizeRoles(roles);
     if (!room || !list) return reply(cb, NO);
@@ -300,16 +319,15 @@ io.on("connection", (socket) => {
     reply(cb, { ok: true });
   });
 
-  socket.on("kick", ({ id } = {}, cb) => {
+  on("kick", ({ id } = {}, cb) => {
     const room = hostRoom(socket);
     if (!room) return reply(cb, NO);
-    room.players.delete(id);
-    room.votes.delete(id);
+    removePlayer(room, id);
     broadcast(room);
     reply(cb, { ok: true });
   });
 
-  socket.on("setOut", ({ id, out } = {}, cb) => {
+  on("setOut", ({ id, out } = {}, cb) => {
     const room = hostRoom(socket);
     const p = room && room.players.get(id);
     if (!p) return reply(cb, { error: "مش موجود" });
@@ -331,7 +349,7 @@ io.on("connection", (socket) => {
     reply(cb, { ok: true });
   });
 
-  socket.on("deal", (_d, cb) => {
+  on("deal", (_d, cb) => {
     const room = hostRoom(socket);
     if (!room) return reply(cb, NO);
     const players = [...room.players.values()];
@@ -355,7 +373,7 @@ io.on("connection", (socket) => {
     reply(cb, { ok: true });
   });
 
-  socket.on("setPhase", ({ phase } = {}, cb) => {
+  on("setPhase", ({ phase } = {}, cb) => {
     const room = hostRoom(socket);
     if (!room || room.status !== "playing" || room.winner || !PHASES.has(phase)) return reply(cb, NO);
     if (phase === room.phase) return reply(cb, { ok: true });
@@ -370,7 +388,7 @@ io.on("connection", (socket) => {
   });
 
   // الحكم بيرد على المفتش/المحقق
-  socket.on("answer", ({ playerId, answer } = {}, cb) => {
+  on("answer", ({ playerId, answer } = {}, cb) => {
     const room = hostRoom(socket);
     const a = room && room.actions.get(playerId);
     if (!a || !["mafia", "town"].includes(answer)) return reply(cb, NO);
@@ -379,7 +397,7 @@ io.on("connection", (socket) => {
     reply(cb, { ok: true });
   });
 
-  socket.on("endRound", (_d, cb) => {
+  on("endRound", (_d, cb) => {
     const room = hostRoom(socket);
     if (!room) return reply(cb, NO);
     for (const p of room.players.values()) { p.role = null; p.out = false; }
@@ -392,18 +410,19 @@ io.on("connection", (socket) => {
   // ----- player actions -----
   const validTarget = (room, id) => alive(room.players.get(id));
 
-  socket.on("nightAction", ({ targetId } = {}, cb) => {
+  on("nightAction", ({ targetId } = {}, cb) => {
     const ctx = playerCtx(socket);
     if (!ctx || ctx.room.phase !== "night") return reply(cb, { error: "الاختيار بيكون بالليل بس." });
     const { room, me } = ctx;
     if (me.role.team === "mafia" || me.role.ability === "none") return reply(cb, NO);
     if (!validTarget(room, targetId)) return reply(cb, { error: "اختار لاعب لسا باللعبة." });
+    if (me.role.ability === "check" && targetId === me.id) return reply(cb, { error: "ما بتقدر تفحص حالك." });
     room.actions.set(me.id, { targetId, reply: null });
     broadcast(room);
     reply(cb, { ok: true });
   });
 
-  socket.on("mafiaVote", ({ targetId } = {}, cb) => {
+  on("mafiaVote", ({ targetId } = {}, cb) => {
     const ctx = playerCtx(socket);
     if (!ctx || ctx.room.phase !== "night" || ctx.me.role.team !== "mafia") return reply(cb, NO);
     if (!validTarget(ctx.room, targetId)) return reply(cb, { error: "اختار لاعب لسا باللعبة." });
@@ -412,7 +431,7 @@ io.on("connection", (socket) => {
     reply(cb, { ok: true });
   });
 
-  socket.on("mafiaChat", ({ text } = {}, cb) => {
+  on("mafiaChat", ({ text } = {}, cb) => {
     const ctx = playerCtx(socket);
     if (!ctx || ctx.me.role.team !== "mafia") return reply(cb, NO);
     text = clean(text, 200);
@@ -424,7 +443,7 @@ io.on("connection", (socket) => {
     reply(cb, { ok: true });
   });
 
-  socket.on("mafiaSend", ({ targetId } = {}, cb) => {
+  on("mafiaSend", ({ targetId } = {}, cb) => {
     const ctx = playerCtx(socket);
     if (!ctx || ctx.room.phase !== "night" || ctx.me.role.team !== "mafia") return reply(cb, NO);
     if (!validTarget(ctx.room, targetId)) return reply(cb, { error: "اختار لاعب لسا باللعبة." });
@@ -433,7 +452,7 @@ io.on("connection", (socket) => {
     reply(cb, { ok: true });
   });
 
-  socket.on("dayVote", ({ targetId } = {}, cb) => {
+  on("dayVote", ({ targetId } = {}, cb) => {
     const ctx = playerCtx(socket);
     if (!ctx) return reply(cb, { error: rooms.get(socket.data.code)?.winner ? "اللعبة انتهت." : "انطردت، ما بتقدر تصوّت." });
     if (ctx.room.phase !== "vote") return reply(cb, { error: "التصويت مش مفتوح هلأ." });
@@ -459,6 +478,8 @@ setInterval(() => {
   const cutoff = Date.now() - 12 * 3600 * 1000;
   for (const [code, room] of rooms) if (room.touched < cutoff && room.sockets.size === 0) rooms.delete(code);
 }, 30 * 60 * 1000).unref();
+
+process.on("uncaughtException", (e) => console.error("uncaught", e));
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log("Mafia server on :" + PORT));
