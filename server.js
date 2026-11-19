@@ -68,6 +68,29 @@ function resetGame(room) {
   room.votes = new Map();
   room.mafia = { votes: new Map(), chat: [], final: null };
   room.actions = new Map();
+  room.winner = null;      // null | {team: "mafia"|"town", reason}
+  room.announce = null;    // آخر واحد انطرد: {seq, id, name, team}
+  room.announceSeq = room.announceSeq || 0;
+}
+
+/**
+ * Has the game been decided?
+ * - المدينة بتربح لما ما يضل ولا مافيا.
+ * - المافيا بتربح لما عددهم يصير قد عدد الباقيين أو أكثر (بالتصويت ما حدا بيقدر يطلعهم).
+ * - والمافيا بتربح كمان إذا الليل جاي وهم ناقصهم لاعب واحد بس عن الباقيين، وما في حدا بيحمي
+ *   (الدكتور أو أي شخصية "بتختار"): بالليل رح يطلعوا واحد ويصيروا قدهم، فما في فايدة نكمّل.
+ * nextIsNight = الليل هو المرحلة الجاية (يعني الطرد صار بالنهار/التصويت، أو الحكم عم يبلّش ليل).
+ */
+function computeWinner(room, nextIsNight) {
+  const living = [...room.players.values()].filter(alive);
+  const m = living.filter((p) => p.role.team === "mafia").length;
+  const o = living.length - m;
+  if (m === 0) return { team: "town", reason: "انطرد كل المافيا." };
+  if (m >= o) return { team: "mafia", reason: `ضلّ ${m} مافيا مقابل ${o} من الباقيين، فما حدا بيقدر يطلعهم بالتصويت.` };
+  const protector = living.some((p) => p.role.team !== "mafia" && p.role.ability === "pick");
+  if (nextIsNight && m === o - 1 && !protector)
+    return { team: "mafia", reason: `ضلّ ${m} مافيا مقابل ${o}، وما في دكتور يحمي. بالليل الجاي المافيا رح يطلعوا واحد ويصيروا قد الباقيين.` };
+  return null;
 }
 
 const nameOf = (room, id) => room.players.get(id)?.name || "؟";
@@ -99,12 +122,16 @@ function viewFor(room, clientId) {
   const isHost = room.hostId === clientId;
   const online = new Set(room.sockets.values());
   const playing = room.status === "playing";
+  const over = playing && !!room.winner;
   const players = [...room.players.values()].map((p) => ({
     id: p.id,
     name: p.name,
     out: p.out,
     online: online.has(p.id),
-    ...(isHost && playing && p.role ? { role: p.role.name, team: p.role.team } : {}),
+    // الكل بيعرف فريق اللي انطرد (مافيا أو صالح) بس مش شخصيته
+    ...(playing && p.out && p.role ? { revealed: p.role.team } : {}),
+    // الحكم بيشوف الكل، وبآخر اللعبة الكل بيشوف الكل
+    ...((isHost || over) && playing && p.role ? { role: p.role.name, team: p.role.team } : {}),
   }));
   const me = room.players.get(clientId);
   const base = {
@@ -112,7 +139,9 @@ function viewFor(room, clientId) {
     hostOnline: online.has(room.hostId), inRoom: isHost || !!me, meId: clientId,
     roles: isHost ? room.roles : null, players,
     phase: playing ? room.phase : null, night: room.night,
-    tally: playing && room.phase === "vote" ? tally(room) : null,
+    tally: playing && !over && room.phase === "vote" ? tally(room) : null,
+    winner: over ? room.winner : null,
+    announce: playing ? room.announce : null,
   };
 
   if (isHost && playing) {
@@ -183,7 +212,7 @@ function hostRoom(socket) {
 // returns {room, me} only when the caller is a living player in a running game
 function playerCtx(socket) {
   const room = rooms.get(socket.data.code);
-  if (!room || room.status !== "playing") return null;
+  if (!room || room.status !== "playing" || room.winner) return null;
   const me = room.players.get(socket.data.clientId);
   if (!alive(me)) return null;
   return { room, me };
@@ -284,7 +313,20 @@ io.on("connection", (socket) => {
     const room = hostRoom(socket);
     const p = room && room.players.get(id);
     if (!p) return reply(cb, { error: "مش موجود" });
+    if (p.out === !!out) return reply(cb, { ok: true });
+    // بعد ما تنتهي اللعبة، الحكم بيقدر بس يرجّع حدا انشطب بالغلط
+    if (room.winner && out) return reply(cb, { error: "اللعبة انتهت." });
     p.out = !!out;
+    if (room.status === "playing" && p.role) {
+      if (p.out) {
+        room.announceSeq += 1;
+        room.announce = { seq: room.announceSeq, id: p.id, name: p.name, team: p.role.team };
+      } else if (room.announce?.id === p.id) {
+        room.announce = null; // الحكم رجّعه، يعني كان غلط
+      }
+      // طرد بالليل يعني النهار جاي؛ طرد بالنهار أو التصويت يعني الليل جاي
+      room.winner = computeWinner(room, room.phase !== "night");
+    }
     broadcast(room);
     reply(cb, { ok: true });
   });
@@ -315,11 +357,14 @@ io.on("connection", (socket) => {
 
   socket.on("setPhase", ({ phase } = {}, cb) => {
     const room = hostRoom(socket);
-    if (!room || room.status !== "playing" || !PHASES.has(phase)) return reply(cb, NO);
+    if (!room || room.status !== "playing" || room.winner || !PHASES.has(phase)) return reply(cb, NO);
     if (phase === room.phase) return reply(cb, { ok: true });
     if (phase === "night") { room.night += 1; resetNight(room); }
     if (phase === "vote") room.votes = new Map();
     room.phase = phase;
+    room.announce = null;
+    // الليل بلّش: إذا المافيا ناقصهم واحد وما في حدا يحمي، اللعبة انحسمت
+    room.winner = computeWinner(room, phase === "night");
     broadcast(room);
     reply(cb, { ok: true });
   });
@@ -390,7 +435,7 @@ io.on("connection", (socket) => {
 
   socket.on("dayVote", ({ targetId } = {}, cb) => {
     const ctx = playerCtx(socket);
-    if (!ctx) return reply(cb, { error: "انطردت، ما بتقدر تصوّت." });
+    if (!ctx) return reply(cb, { error: rooms.get(socket.data.code)?.winner ? "اللعبة انتهت." : "انطردت، ما بتقدر تصوّت." });
     if (ctx.room.phase !== "vote") return reply(cb, { error: "التصويت مش مفتوح هلأ." });
     const { room, me } = ctx;
     if (!targetId) room.votes.delete(me.id);
