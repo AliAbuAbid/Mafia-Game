@@ -1,0 +1,10 @@
+# إعدادات Render: موقع Node واحد على الخطة المجانية
+services:
+  - type: web
+    name: mafia-game
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
