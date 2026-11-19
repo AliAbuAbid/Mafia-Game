@@ -90,6 +90,30 @@ li.out .nm{text-decoration:line-through;color:var(--muted)}
 .pcard.back .big{color:var(--card);font-size:22px}
 .pcard.out{filter:grayscale(.85);opacity:.75}
 .stamp{position:absolute;top:44%;font-family:var(--f-display);font-size:30px;color:var(--danger);border:3px solid var(--danger);padding:2px 14px;border-radius:8px;transform:rotate(-14deg);background:#f4edda}
+.pcard{width:min(260px,100%)}
+/* phases */
+.seg{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;background:var(--felt);border:1px solid var(--line);border-radius:12px;padding:5px}
+.seg button{border:0;background:transparent;border-radius:8px;padding:10px 6px;cursor:pointer;font-weight:600;color:var(--muted)}
+.seg button.on{background:var(--brass);color:var(--brass-ink)}
+.phase{display:flex;align-items:center;gap:10px;border-radius:var(--r);padding:12px 16px;font-family:var(--f-display);font-size:19px;border:1px solid var(--line)}
+.phase.night{background:#0a1a2c;border-color:#24406a;color:#bcd2f0}
+.phase.day{background:#2c2410;border-color:#6a5524;color:#f0dcae}
+.phase.vote{background:#2c1412;border-color:#6a2c26;color:#f0c0b8}
+.phase small{font-family:var(--f-body);font-size:13px;opacity:.8;margin-inline-start:auto}
+.targets{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
+.tgt{border:1px solid var(--line);background:var(--felt);border-radius:10px;padding:10px;cursor:pointer;font-weight:600;text-align:start;display:flex;flex-direction:column;gap:2px;min-width:0;overflow-wrap:anywhere}
+.tgt:hover{border-color:var(--brass)}
+.tgt.on{border-color:var(--brass);background:color-mix(in srgb,var(--brass) 20%,var(--felt))}
+.tgt small{font-weight:400;color:var(--muted);font-size:12px}
+.tgt .bar{height:4px;border-radius:2px;background:var(--mafia);margin-top:4px}
+.ok{color:var(--ok)}
+.chat{display:flex;flex-direction:column;gap:6px;max-height:220px;overflow-y:auto;padding:4px}
+.msg{background:var(--felt);border:1px solid var(--line);border-radius:10px;padding:6px 10px;font-size:14px;overflow-wrap:anywhere;align-self:flex-start;max-width:85%}
+.msg.mine{align-self:flex-end;border-color:color-mix(in srgb,var(--mafia) 50%,var(--line))}
+.msg b{color:var(--mafia);font-size:12px;display:block}
+.answer{border-radius:10px;padding:10px 12px;font-weight:600}
+.answer.mafia{background:color-mix(in srgb,var(--mafia) 20%,transparent);color:var(--mafia)}
+.answer.town{background:color-mix(in srgb,var(--town) 20%,transparent);color:var(--town)}
 .confirm{border:1px solid var(--danger);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:10px}
 #toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));background:var(--card);color:var(--card-ink);padding:10px 16px;border-radius:10px;font-weight:600;box-shadow:0 8px 24px #0008;max-width:calc(100% - 32px);z-index:20}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -167,6 +191,13 @@ li.out .nm{text-decoration:line-through;color:var(--muted)}
                   <select id="rTeam"><option value="town">المدينة</option><option value="mafia">المافيا</option><option value="neutral">مستقل</option></select>
                 </label>
               </div>
+              <label for="rAbility">شو بيعمل بالليل
+                <select id="rAbility">
+                  <option value="none">ولا اشي</option>
+                  <option value="pick">بيختار لاعب واختياره بيروح للحكم (زي الدكتور)</option>
+                  <option value="check">بيفحص لاعب والحكم بيرد عليه مافيا ولا لأ (زي المحقق)</option>
+                </select>
+              </label>
               <label for="rDesc">شو بتعمل (اختياري)<textarea id="rDesc" rows="2" maxlength="140" placeholder="مثلاً: مرة وحدة باللعبة بتقدر تطلق النار على لاعب"></textarea></label>
               <button class="btn" id="addRoleBtn" type="button">أضف الشخصية</button>
             </div>
@@ -177,6 +208,17 @@ li.out .nm{text-decoration:line-through;color:var(--muted)}
       </div>
 
       <div id="hostPlay" style="display:flex;flex-direction:column;gap:20px">
+        <div class="panel">
+          <div id="hPhaseBanner"></div>
+          <div class="seg" role="group" aria-label="مرحلة اللعبة">
+            <button type="button" data-phase="night">ليل</button>
+            <button type="button" data-phase="day">نهار ونقاش</button>
+            <button type="button" data-phase="vote">تصويت</button>
+          </div>
+          <p class="muted small">لما تبلّش ليل جديد، اختيارات الليلة الماضية بتنمسح. ولما تفتح التصويت، الأصوات بتبلّش من الصفر.</p>
+        </div>
+        <div id="hReport"></div>
+        <div id="hVotes"></div>
         <div class="tally" id="hTally"></div>
         <div class="panel">
           <div class="row between"><h2>كل الشخصيات</h2><span class="muted small">بتشوفها إنت بس</span></div>
@@ -194,7 +236,19 @@ li.out .nm{text-decoration:line-through;color:var(--muted)}
 
     <!-- PLAYER -->
     <div id="playerPanel" hidden style="display:flex;flex-direction:column;gap:20px;margin-top:20px">
+      <div id="pPhase"></div>
       <div id="pCardBox"></div>
+      <div id="pAction"></div>
+      <div class="panel" id="mafiaPanel" hidden>
+        <div class="row between"><h2 style="color:var(--mafia)">غرفة المافيا</h2><span class="muted small">بتشوفوها إنتو بس</span></div>
+        <div id="mBody" style="display:flex;flex-direction:column;gap:12px"></div>
+        <h3>دردشة المافيا</h3>
+        <div class="chat" id="mChat"></div>
+        <form class="row" id="mChatForm" style="flex-wrap:nowrap">
+          <input id="mChatIn" maxlength="200" placeholder="اكتب لجماعتك…" autocomplete="off" aria-label="رسالة للمافيا">
+          <button class="btn sm" type="submit">ابعت</button>
+        </form>
+      </div>
       <div class="panel">
         <div class="row between"><h2>اللاعبين</h2><span class="pill" id="pCount"></span></div>
         <ul class="list" id="pPlayers"></ul>
@@ -214,6 +268,17 @@ const TEAM = {mafia:"المافيا", town:"المدينة", neutral:"مستقل
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const ls = {get(k){try{return localStorage.getItem(k)}catch{return null}}, set(k,v){try{localStorage.setItem(k,v)}catch{}}, del(k){try{localStorage.removeItem(k)}catch{}}};
 const teamCls = t => "t-"+(TEAM[t]?t:"town");
+const ABIL = {pick:"بيختار بالليل", check:"بيفحص بالليل"};
+const PHASE = {night:["☾","الليل","المدينة نايمة"], day:["☀","النهار","وقت النقاش"], vote:["✋","التصويت","مين المافيا؟"]};
+function phaseBanner(st){
+  const [ic, t, sub] = PHASE[st.phase] || PHASE.night;
+  return `<div class="phase ${esc(st.phase)}"><span aria-hidden="true">${ic}</span><span>${t}${st.phase==="night"?" "+st.night:""}</span><small>${sub}</small></div>`;
+}
+// grid of tappable players; sel = selected id; extra(p) adds a line under the name
+function targetGrid(players, attr, sel, extra){
+  if(!players.length) return `<p class="muted small">ما في لاعبين تختار منهم.</p>`;
+  return `<div class="targets">${players.map(p=>`<button type="button" class="tgt ${p.id===sel?"on":""}" ${attr}="${esc(p.id)}" aria-pressed="${p.id===sel}">${esc(p.name)}${extra?extra(p):""}</button>`).join("")}</div>`;
+}
 let toastT;
 function toast(msg){const t=$("toast");t.textContent=msg;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>t.hidden=true,2600);}
 function show(view){ for(const v of ["vBoot","vHome","vRoom"]) $(v).hidden = v!==view; }
@@ -321,7 +386,7 @@ function renderHost(st, playing){
     const roles = st.roles||[]; const sum = roles.reduce((a,r)=>a+(r.count||0),0); const citizens = n - sum;
     $("hRoles").innerHTML = roles.map((r,i)=>`<li>
         <span class="dot ${teamCls(r.team)}"></span>
-        <span class="nm"><b>${esc(r.name)}</b> <span class="muted small">· ${TEAM[r.team]||"المدينة"}</span>${r.desc?`<br><span class="muted small">${esc(r.desc)}</span>`:""}</span>
+        <span class="nm"><b>${esc(r.name)}</b> <span class="muted small">· ${TEAM[r.team]||"المدينة"}${r.team!=="mafia"&&ABIL[r.ability]?" · "+ABIL[r.ability]:""}</span>${r.desc?`<br><span class="muted small">${esc(r.desc)}</span>`:""}</span>
         <span class="stepper"><button data-dec="${i}" aria-label="أنقص">−</button><span>${r.count}</span><button data-inc="${i}" aria-label="زِد">+</button></span>
         <button class="btn sm" data-del="${i}" aria-label="احذف">×</button></li>`).join("")
       + `<li><span class="dot t-town"></span><span class="nm"><b>مواطن</b> <span class="muted small">· بيكمّل الباقي تلقائياً</span></span><span class="stepper"><span style="padding:0 12px">${Math.max(0,citizens)}</span></span><span style="width:34px"></span></li>`;
@@ -340,6 +405,7 @@ function renderHost(st, playing){
         ${p.role?`<span class="rolechip ${teamCls(p.team)}">${esc(p.role)}</span>`:`<span class="muted small">بدون شخصية</span>`}
         ${p.out?`<button class="btn sm" data-back="${esc(p.id)}">رجّعه</button>`:`<button class="btn sm danger" data-out="${esc(p.id)}">انطرد</button>`}</li>`;
     }).join("") || `<li><span class="nm muted">ما في لاعبين.</span></li>`;
+    renderHostPhase(st);
     $("hTally").innerHTML = `<div><span class="muted small">مافيا بالطاولة</span><b style="color:var(--mafia)">${am}</b></div>
       <div><span class="muted small">المدينة بالطاولة</span><b style="color:var(--town)">${at}</b></div>`
       + (an?`<div><span class="muted small">مستقلين</span><b style="color:var(--neutral)">${an}</b></div>`:"")
@@ -347,7 +413,104 @@ function renderHost(st, playing){
   }
 }
 
+function renderHostPhase(st){
+  $("hPhaseBanner").innerHTML = phaseBanner(st);
+  document.querySelectorAll("[data-phase]").forEach(b=>{ const on=b.dataset.phase===st.phase; b.classList.toggle("on",on); b.setAttribute("aria-pressed",on); });
+  const rep = st.report || {actions:[], mafia:{votes:[],final:null}};
+  const m = rep.mafia;
+  const mafiaHtml = `<li style="flex-direction:column;align-items:stretch;gap:6px">
+      <div class="row between"><b style="color:var(--mafia)">قرار المافيا</b>
+        ${m.final?`<span class="rolechip t-mafia">${esc(m.final.target)}</span>`:`<span class="muted small">لسا ما بعتوا</span>`}</div>
+      ${m.final?`<span class="muted small">بعته ${esc(m.final.by)}</span>`:""}
+      ${m.votes.length?`<span class="muted small">اقتراحاتهم: ${m.votes.map(v=>esc(v.from)+": "+esc(v.target)).join(" · ")}</span>`:""}
+    </li>`;
+  const acts = rep.actions.map(a=>{
+    const verb = a.ability==="check" ? "فحص" : "اختار";
+    let right = a.target ? `<span class="rolechip ${teamCls(a.targetTeam)}">${esc(a.target)}${a.targetRole?" · "+esc(a.targetRole):""}</span>` : `<span class="muted small">${a.out?"منطرد":"لسا ما اختار"}</span>`;
+    let answer = "";
+    if(a.ability==="check" && a.target){
+      answer = `<div class="row"><span class="muted small">ردّك عليه:</span>
+        <button class="btn sm ${a.reply==="mafia"?"danger fill":""}" data-ans="mafia" data-pid="${esc(a.actorId)}">مافيا</button>
+        <button class="btn sm ${a.reply==="town"?"primary":""}" data-ans="town" data-pid="${esc(a.actorId)}">مش مافيا</button>
+        ${a.reply?`<span class="ok small">وصله الرد</span>`:""}</div>`;
+    }
+    return `<li style="flex-direction:column;align-items:stretch;gap:6px" class="${a.out?"out":""}">
+      <div class="row between"><span class="nm"><b>${esc(a.role)}</b> <span class="muted small">(${esc(a.actor)}) ${verb}:</span></span>${right}</div>${answer}</li>`;
+  }).join("");
+  $("hReport").innerHTML = `<div class="panel"><div class="row between"><h2>تقرير الليل ${st.night}</h2><span class="muted small">بيوصلك إنت بس</span></div>
+    <ul class="list">${mafiaHtml}${acts}</ul></div>`;
+  if(st.phase==="vote" && st.tally){
+    const votedNames = new Set(st.tally.flatMap(t=>t.voters));
+    const waiting = st.players.filter(p=>!p.out && p.role && !votedNames.has(p.name)).map(p=>p.name);
+    $("hVotes").innerHTML = `<div class="panel"><h2>الأصوات</h2>
+      <ul class="list">${st.tally.map(t=>`<li><span class="nm"><b>${esc(t.name)}</b> <span class="rolechip t-mafia">${t.count}</span><br><span class="muted small">${t.voters.map(esc).join("، ")}</span></span>
+        <button class="btn sm danger" data-out="${esc(t.targetId)}">اطرده</button></li>`).join("") || `<li><span class="nm muted">لسا ما حدا صوّت.</span></li>`}</ul>
+      ${waiting.length?`<p class="muted small">لسا ما صوّتوا: ${waiting.map(esc).join("، ")}</p>`:`<p class="ok small">الكل صوّت.</p>`}</div>`;
+  } else $("hVotes").innerHTML = "";
+}
+
+function renderPlayerPhase(st, me){
+  const act=$("pAction"), mp=$("mafiaPanel"), r=st.myRole;
+  $("pPhase").innerHTML = st.phase ? phaseBanner(st) : "";
+  mp.hidden = !(r && r.team==="mafia" && me && !me.out);
+  if(!r || !me){ act.innerHTML=""; return; }
+  const aliveP = st.players.filter(p=>!p.out);
+  const others = aliveP.filter(p=>p.id!==st.meId);
+  let h = "";
+  if(me.out){
+    h = `<div class="panel"><h2>انطردت</h2><p class="muted">ما بتقدر تختار أو تصوّت. ضلّك تابع اللعبة بس بلا ما تحكي.</p></div>`;
+  } else if(st.phase==="night"){
+    if(r.ability==="pick" || r.ability==="check"){
+      const a = st.myAction;
+      const list = r.ability==="check" ? others : aliveP;
+      h = `<div class="panel"><h2>${r.ability==="check"?"مين بدك تفحص الليلة؟":"مين بدك تختار الليلة؟"}</h2>
+        <p class="muted small">اضغط على لاعب، واختيارك بيوصل للحكم فوراً. بتقدر تغيّره لحد ما يطلع الصبح.</p>
+        ${targetGrid(list, "data-act", a?.targetId)}
+        ${a?`<p class="ok small">وصل للحكم: ${esc(a.target)}</p>`:`<p class="muted small">لسا ما اخترت.</p>`}
+        ${answerBox(a)}</div>`;
+    } else if(r.ability==="mafia"){
+      h = "";
+    } else {
+      h = `<div class="panel"><h2>نام…</h2><p class="muted">ما عندك اشي تعمله بالليل. استنى الصبح.</p></div>`;
+    }
+  } else if(st.phase==="day"){
+    h = `<div class="panel"><h2>وقت النقاش</h2><p class="muted">احكوا مين بتشكّوا فيه. الحكم بيفتح التصويت لما تخلصوا.</p>${answerBox(st.myAction)}</div>`;
+  } else if(st.phase==="vote"){
+    const tally = Object.fromEntries((st.tally||[]).map(t=>[t.targetId,t]));
+    const max = Math.max(1, ...(st.tally||[]).map(t=>t.count));
+    h = `<div class="panel"><h2>مين المافيا؟</h2>
+      <p class="muted small">اضغط على اللاعب اللي بتشك فيه. بتقدر تغيّر صوتك أو تلغيه بضغطة ثانية لحد ما الحكم يسكّر التصويت.</p>
+      ${targetGrid(others, "data-vote", st.myVote, p=>{ const t=tally[p.id]; return `<small>${t?t.count+" صوت":"ولا صوت"}${t?" · "+t.voters.map(esc).join("، "):""}</small>${t?`<span class="bar" style="width:${Math.round(t.count/max*100)}%"></span>`:""}`; })}
+      ${st.myVote?`<p class="ok small">صوتك على: ${esc((st.players.find(p=>p.id===st.myVote)||{}).name||"")}</p>`:`<p class="muted small">لسا ما صوّتت.</p>`}</div>`;
+  }
+  act.innerHTML = h;
+  if(!mp.hidden) renderMafia(st, me);
+}
+function answerBox(a){
+  if(!a || !a.reply) return "";
+  return a.reply==="mafia" ? `<div class="answer mafia">ردّ الحكم: ${esc(a.target)} مافيا</div>` : `<div class="answer town">ردّ الحكم: ${esc(a.target)} مش مافيا</div>`;
+}
+function renderMafia(st, me){
+  const m = st.mafia || {votes:[],chat:[],final:null};
+  const mine = m.votes.find(v=>v.fromId===st.meId);
+  let h = "";
+  if(st.phase==="night"){
+    const targets = st.players.filter(p=>!p.out && p.id!==st.meId);
+    h += `<p class="muted small">كل واحد فيكم يقترح مين تطلعوا، اتفقوا بالدردشة، وبعدين وحدا منكم يبعت القرار للحكم.</p>
+      ${targetGrid(targets, "data-mvote", mine?.targetId, p=>{ const by=m.votes.filter(v=>v.targetId===p.id).map(v=>v.from); return by.length?`<small>${by.map(esc).join("، ")}</small>`:""; })}
+      <button class="btn primary" data-msend="${esc(mine?.targetId||"")}" ${mine?"":"disabled"}>${mine?"ابعت القرار للحكم: "+esc(mine.target):"اختار لاعب أول"}</button>`;
+  } else {
+    h += `<p class="muted small">الاقتراح والإرسال بيكونوا بالليل بس.</p>`;
+  }
+  h += m.final ? `<div class="answer mafia">${esc(m.final.by)} بعت للحكم: ${esc(m.final.target)}</div>` : (st.phase==="night"?`<p class="muted small">لسا ما حدا بعت القرار.</p>`:"");
+  $("mBody").innerHTML = h;
+  const box=$("mChat"), atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  box.innerHTML = m.chat.length ? m.chat.map(c=>`<div class="msg ${c.fromId===st.meId?"mine":""}"><b>${esc(c.from)}</b>${esc(c.text)}</div>`).join("") : `<p class="muted small">ما في رسائل لسا.</p>`;
+  if(atBottom) box.scrollTop = box.scrollHeight;
+}
+
 function renderPlayer(st, playing, me){
+  renderPlayerPhase(st, me);
   $("pCount").textContent = st.players.length+" لاعب";
   $("pPlayers").innerHTML = st.players.map(p=>`<li class="${p.out?"out":""}">${onlineDot(p)}<span class="nm">${esc(p.name)}${p.id===st.meId?' <span class="muted small">(إنت)</span>':""}</span>${p.out?'<span class="pill">انطرد</span>':""}</li>`).join("");
   const box = $("pCardBox");
@@ -385,7 +548,14 @@ document.addEventListener("click", async e => {
   if(ds.home){ ls.del("mafia_room"); goHome(); return; }
   if(ds.hide){ S.hideCard=true; render(); return; }
   if(ds.flip){ S.hideCard=false; render(); return; }
+  const send = async (ev, data) => { t.disabled=true; const r=await call(ev,data); t.disabled=false; if(r.error) toast(r.error); return r; };
+  if(ds.act){ send("nightAction",{targetId:ds.act}); return; }
+  if(ds.mvote){ send("mafiaVote",{targetId:ds.mvote}); return; }
+  if(ds.msend!==undefined){ const r=await send("mafiaSend",{targetId:ds.msend}); if(r.ok) toast("وصل القرار للحكم"); return; }
+  if(ds.vote){ send("dayVote",{targetId: S.state?.myVote===ds.vote ? null : ds.vote}); return; }
   if(!S.state?.isHost) return;
+  if(ds.phase){ send("setPhase",{phase:ds.phase}); return; }
+  if(ds.ans){ send("answer",{playerId:ds.pid, answer:ds.ans}); return; }
   const roles = JSON.parse(JSON.stringify(S.state.roles||[]));
   if(ds.inc!==undefined){ roles[+ds.inc].count++; setRoles(roles); }
   else if(ds.dec!==undefined){ if(roles[+ds.dec].count>0){ roles[+ds.dec].count--; setRoles(roles); } }
@@ -398,7 +568,7 @@ $("pCardBox").addEventListener("keydown", e => { if((e.key==="Enter"||e.key===" 
 $("addRoleBtn").onclick = () => {
   const name=$("rName").value.trim(); if(!name){ $("rName").focus(); return; }
   const roles = JSON.parse(JSON.stringify(S.state.roles||[]));
-  roles.push({id:"r"+Date.now().toString(36), name, team:$("rTeam").value, count:1, desc:$("rDesc").value.trim()});
+  roles.push({id:"r"+Date.now().toString(36), name, team:$("rTeam").value, ability:$("rAbility").value, count:1, desc:$("rDesc").value.trim()});
   setRoles(roles); $("rName").value=""; $("rDesc").value=""; toast("انضافت "+name);
 };
 $("dealBtn").onclick = async () => {
@@ -411,6 +581,11 @@ $("endYes").onclick = async () => {
   $("endYes").disabled=false; $("endConfirm").hidden=true; $("endBtn").hidden=false;
   toast(r.error || "رجعتوا للبداية. وزّعوا من جديد.");
 };
+$("mChatForm").addEventListener("submit", async e => {
+  e.preventDefault(); const inp=$("mChatIn"), text=inp.value.trim(); if(!text) return;
+  inp.value=""; const r=await call("mafiaChat",{text}); if(r.error){ toast(r.error); inp.value=text; }
+  const box=$("mChat"); box.scrollTop=box.scrollHeight;
+});
 $("leaveBtn").onclick = async () => { await call("leave"); ls.del("mafia_room"); S.code=null; goHome(false); };
 })();
 

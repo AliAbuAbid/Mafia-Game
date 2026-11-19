@@ -1,5 +1,5 @@
 // طاولة المافيا — سيرفر الغرف المباشرة
-// الشخصيات محفوظة على السيرفر، وكل لاعب بيوصله دوره هو بس. الحكم بيوصله الكل.
+// الشخصيات وكل اختيارات الليل محفوظة على السيرفر. كل لاعب بيوصله اللي إله بس، والحكم بيوصله الكل.
 const path = require("path");
 const http = require("http");
 const crypto = require("crypto");
@@ -12,17 +12,30 @@ const io = new Server(server);
 app.get("/", (_req, res) => res.sendFile(path.join(__dirname, "index.html")));
 app.get("/health", (_req, res) => res.send("ok"));
 
+// ability: "pick" = بيختار لاعب والاختيار بيروح للحكم، "check" = بيفحص لاعب والحكم بيردّ عليه، "none" = بدون
 const DEFAULT_ROLES = [
-  { id: "mafia", name: "مافيا", team: "mafia", count: 2, desc: "كل ليلة بتتفقوا مع بعض على لاعب تطلعوه." },
-  { id: "inspector", name: "مفتش", team: "town", count: 1, desc: "كل ليلة بتسأل الحكم عن لاعب: مافيا ولا لأ." },
-  { id: "detective", name: "محقق", team: "town", count: 1, desc: "بتحقق بشخصية لاعب وبتساعد المدينة تكشف المافيا." },
-  { id: "doctor", name: "دكتور", team: "town", count: 1, desc: "كل ليلة بتختار لاعب تحميه من المافيا." },
+  { id: "mafia", name: "مافيا", team: "mafia", ability: "none", count: 2, desc: "كل ليلة بتتفقوا مع بعض على لاعب تطلعوه." },
+  { id: "inspector", name: "مفتش", team: "town", ability: "check", count: 1, desc: "كل ليلة بتختار لاعب والحكم بيقلك إذا مافيا ولا لأ." },
+  { id: "detective", name: "محقق", team: "town", ability: "check", count: 1, desc: "كل ليلة بتحقق بلاعب والحكم بيقلك إذا مافيا ولا لأ." },
+  { id: "doctor", name: "دكتور", team: "town", ability: "pick", count: 1, desc: "كل ليلة بتختار لاعب تحميه من المافيا." },
 ];
-const CITIZEN = { name: "مواطن", team: "town", desc: "ما عندك قدرة خاصة. صوّت صح واكشف المافيا." };
+const CITIZEN = { name: "مواطن", team: "town", ability: "none", desc: "ما عندك قدرة خاصة. صوّت صح واكشف المافيا." };
 const TEAMS = new Set(["mafia", "town", "neutral"]);
+const ABILITIES = new Set(["none", "pick", "check"]);
+const PHASES = new Set(["night", "day", "vote"]);
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 
-/** rooms: code -> { code, hostId, status, round, roles, players: Map(id -> player), sockets: Map(socketId -> clientId), touched } */
+/**
+ * rooms: code -> {
+ *   code, hostId, status: "lobby"|"playing", round, roles,
+ *   phase: "night"|"day"|"vote", night,
+ *   players: Map(id -> {id, name, out, role, joinedAt}),
+ *   actions: Map(playerId -> {targetId, reply}),      // اختيارات الليل للأدوار الخاصة
+ *   mafia: {votes: Map(id -> targetId), chat: [], final: {by, targetId} | null},
+ *   votes: Map(voterId -> targetId),                    // تصويت النهار
+ *   sockets: Map(socketId -> clientId), touched
+ * }
+ */
 const rooms = new Map();
 
 const clean = (s, n) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
@@ -45,42 +58,94 @@ function shuffle(a) {
   return a;
 }
 
-function connectedIds(room) {
-  return new Set(room.sockets.values());
+function resetNight(room) {
+  room.actions = new Map();
+  room.mafia = { votes: new Map(), chat: room.mafia ? room.mafia.chat : [], final: null };
+}
+function resetGame(room) {
+  room.phase = "night";
+  room.night = 0;
+  room.votes = new Map();
+  room.mafia = { votes: new Map(), chat: [], final: null };
+  room.actions = new Map();
+}
+
+const nameOf = (room, id) => room.players.get(id)?.name || "؟";
+const alive = (p) => p && !p.out && p.role;
+
+function tally(room) {
+  const counts = new Map();
+  for (const [voter, target] of room.votes) {
+    if (!alive(room.players.get(voter)) || !alive(room.players.get(target))) continue;
+    if (!counts.has(target)) counts.set(target, []);
+    counts.get(target).push(voter);
+  }
+  return [...counts.entries()]
+    .map(([targetId, voters]) => ({ targetId, name: nameOf(room, targetId), count: voters.length, voters: voters.map((v) => nameOf(room, v)) }))
+    .sort((a, b) => b.count - a.count);
+}
+
+function mafiaView(room) {
+  return {
+    votes: [...room.mafia.votes.entries()]
+      .filter(([id]) => alive(room.players.get(id)))
+      .map(([id, t]) => ({ fromId: id, from: nameOf(room, id), targetId: t, target: nameOf(room, t) })),
+    chat: room.mafia.chat.map((m) => ({ from: nameOf(room, m.from), fromId: m.from, text: m.text })),
+    final: room.mafia.final ? { by: nameOf(room, room.mafia.final.by), targetId: room.mafia.final.targetId, target: nameOf(room, room.mafia.final.targetId) } : null,
+  };
 }
 
 function viewFor(room, clientId) {
   const isHost = room.hostId === clientId;
-  const online = connectedIds(room);
+  const online = new Set(room.sockets.values());
+  const playing = room.status === "playing";
   const players = [...room.players.values()].map((p) => ({
     id: p.id,
     name: p.name,
     out: p.out,
     online: online.has(p.id),
-    ...(isHost && room.status === "playing" && p.role ? { role: p.role.name, team: p.role.team } : {}),
+    ...(isHost && playing && p.role ? { role: p.role.name, team: p.role.team } : {}),
   }));
   const me = room.players.get(clientId);
-  let myRole = null;
-  if (!isHost && me && room.status === "playing" && me.role) {
-    const r = me.role;
-    const mates =
-      r.team === "mafia"
-        ? [...room.players.values()].filter((p) => p.id !== me.id && p.role && p.role.team === "mafia").map((p) => p.name)
-        : [];
-    myRole = { name: r.name, team: r.team, desc: r.desc || "", mates };
-  }
-  return {
-    code: room.code,
-    status: room.status,
-    round: room.round,
-    isHost,
-    hostOnline: online.has(room.hostId),
-    inRoom: isHost || !!me,
-    meId: clientId,
-    roles: isHost ? room.roles : null,
-    players,
-    myRole,
+  const base = {
+    code: room.code, status: room.status, round: room.round, isHost,
+    hostOnline: online.has(room.hostId), inRoom: isHost || !!me, meId: clientId,
+    roles: isHost ? room.roles : null, players,
+    phase: playing ? room.phase : null, night: room.night,
+    tally: playing && room.phase === "vote" ? tally(room) : null,
   };
+
+  if (isHost && playing) {
+    base.report = {
+      actions: [...room.players.values()]
+        .filter((p) => p.role && p.role.team !== "mafia" && p.role.ability !== "none")
+        .map((p) => {
+          const a = room.actions.get(p.id);
+          const t = a && room.players.get(a.targetId);
+          return {
+            actorId: p.id, actor: p.name, role: p.role.name, ability: p.role.ability, out: p.out,
+            targetId: a?.targetId || null, target: t?.name || null,
+            targetRole: t?.role?.name || null, targetTeam: t?.role?.team || null, reply: a?.reply || null,
+          };
+        }),
+      mafia: mafiaView(room),
+    };
+  }
+
+  if (!isHost && me && playing && me.role) {
+    const r = me.role;
+    const mates = r.team === "mafia"
+      ? [...room.players.values()].filter((p) => p.id !== me.id && p.role && p.role.team === "mafia").map((p) => p.name)
+      : [];
+    base.myRole = { name: r.name, team: r.team, ability: r.team === "mafia" ? "mafia" : r.ability || "none", desc: r.desc || "", mates };
+    const a = room.actions.get(me.id);
+    base.myAction = a ? { targetId: a.targetId, target: nameOf(room, a.targetId), reply: a.reply || null } : null;
+    base.myVote = room.votes.get(me.id) || null;
+    if (r.team === "mafia") base.mafia = mafiaView(room);
+  } else {
+    base.myRole = null;
+  }
+  return base;
 }
 
 function broadcast(room) {
@@ -115,12 +180,22 @@ function hostRoom(socket) {
   return room;
 }
 
+// returns {room, me} only when the caller is a living player in a running game
+function playerCtx(socket) {
+  const room = rooms.get(socket.data.code);
+  if (!room || room.status !== "playing") return null;
+  const me = room.players.get(socket.data.clientId);
+  if (!alive(me)) return null;
+  return { room, me };
+}
+
 function sanitizeRoles(list) {
   if (!Array.isArray(list)) return null;
   return list.slice(0, 30).map((r, i) => ({
     id: clean(r?.id, 40) || "r" + i,
     name: clean(r?.name, 24) || "شخصية",
     team: TEAMS.has(r?.team) ? r.team : "town",
+    ability: ABILITIES.has(r?.ability) ? r.ability : "none",
     count: Math.max(0, Math.min(30, Math.floor(Number(r?.count) || 0))),
     desc: clean(r?.desc, 160),
   }));
@@ -128,6 +203,7 @@ function sanitizeRoles(list) {
 
 io.on("connection", (socket) => {
   const reply = (cb, data) => typeof cb === "function" && cb(data);
+  const NO = { error: "مش مسموح هلأ" };
 
   socket.on("create", ({ clientId } = {}, cb) => {
     if (!validId(clientId)) return reply(cb, { error: "معرّف غير صالح، حدّث الصفحة." });
@@ -137,6 +213,7 @@ io.on("connection", (socket) => {
       roles: DEFAULT_ROLES.map((r) => ({ ...r })),
       players: new Map(), sockets: new Map(), touched: Date.now(),
     };
+    resetGame(room);
     rooms.set(code, room);
     attach(socket, room, clientId);
     reply(cb, { ok: true, code });
@@ -163,7 +240,6 @@ io.on("connection", (socket) => {
     broadcast(room);
   });
 
-  // reconnect after refresh: only re-attaches if you are already the host or a player
   socket.on("resume", ({ clientId, code } = {}, cb) => {
     const room = rooms.get(clean(code, 5).toUpperCase());
     if (!validId(clientId) || !room || (room.hostId !== clientId && !room.players.has(clientId)))
@@ -175,7 +251,10 @@ io.on("connection", (socket) => {
 
   socket.on("leave", (_d, cb) => {
     const room = rooms.get(socket.data.code);
-    if (room && room.hostId !== socket.data.clientId) room.players.delete(socket.data.clientId);
+    if (room && room.hostId !== socket.data.clientId) {
+      room.players.delete(socket.data.clientId);
+      room.votes.delete(socket.data.clientId);
+    }
     detach(socket);
     reply(cb, { ok: true });
   });
@@ -185,17 +264,18 @@ io.on("connection", (socket) => {
   // ----- host actions -----
   socket.on("setRoles", ({ roles } = {}, cb) => {
     const room = hostRoom(socket);
-    const clean_ = sanitizeRoles(roles);
-    if (!room || !clean_) return reply(cb, { error: "مش مسموح" });
-    room.roles = clean_;
+    const list = sanitizeRoles(roles);
+    if (!room || !list) return reply(cb, NO);
+    room.roles = list;
     broadcast(room);
     reply(cb, { ok: true });
   });
 
   socket.on("kick", ({ id } = {}, cb) => {
     const room = hostRoom(socket);
-    if (!room) return reply(cb, { error: "مش مسموح" });
+    if (!room) return reply(cb, NO);
     room.players.delete(id);
+    room.votes.delete(id);
     broadcast(room);
     reply(cb, { ok: true });
   });
@@ -211,7 +291,7 @@ io.on("connection", (socket) => {
 
   socket.on("deal", (_d, cb) => {
     const room = hostRoom(socket);
-    if (!room) return reply(cb, { error: "مش مسموح" });
+    if (!room) return reply(cb, NO);
     const players = [...room.players.values()];
     const pool = [];
     for (const r of room.roles) for (let i = 0; i < r.count; i++) pool.push(r);
@@ -222,20 +302,103 @@ io.on("connection", (socket) => {
     shuffle(pool);
     players.forEach((p, i) => {
       const r = pool[i];
-      p.role = { name: r.name, team: r.team, desc: r.desc };
+      p.role = { name: r.name, team: r.team, ability: r.ability || "none", desc: r.desc };
       p.out = false;
     });
     room.status = "playing";
     room.round += 1;
+    resetGame(room);
+    room.night = 1;
+    broadcast(room);
+    reply(cb, { ok: true });
+  });
+
+  socket.on("setPhase", ({ phase } = {}, cb) => {
+    const room = hostRoom(socket);
+    if (!room || room.status !== "playing" || !PHASES.has(phase)) return reply(cb, NO);
+    if (phase === room.phase) return reply(cb, { ok: true });
+    if (phase === "night") { room.night += 1; resetNight(room); }
+    if (phase === "vote") room.votes = new Map();
+    room.phase = phase;
+    broadcast(room);
+    reply(cb, { ok: true });
+  });
+
+  // الحكم بيرد على المفتش/المحقق
+  socket.on("answer", ({ playerId, answer } = {}, cb) => {
+    const room = hostRoom(socket);
+    const a = room && room.actions.get(playerId);
+    if (!a || !["mafia", "town"].includes(answer)) return reply(cb, NO);
+    a.reply = answer;
     broadcast(room);
     reply(cb, { ok: true });
   });
 
   socket.on("endRound", (_d, cb) => {
     const room = hostRoom(socket);
-    if (!room) return reply(cb, { error: "مش مسموح" });
+    if (!room) return reply(cb, NO);
     for (const p of room.players.values()) { p.role = null; p.out = false; }
     room.status = "lobby";
+    resetGame(room);
+    broadcast(room);
+    reply(cb, { ok: true });
+  });
+
+  // ----- player actions -----
+  const validTarget = (room, id) => alive(room.players.get(id));
+
+  socket.on("nightAction", ({ targetId } = {}, cb) => {
+    const ctx = playerCtx(socket);
+    if (!ctx || ctx.room.phase !== "night") return reply(cb, { error: "الاختيار بيكون بالليل بس." });
+    const { room, me } = ctx;
+    if (me.role.team === "mafia" || me.role.ability === "none") return reply(cb, NO);
+    if (!validTarget(room, targetId)) return reply(cb, { error: "اختار لاعب لسا باللعبة." });
+    room.actions.set(me.id, { targetId, reply: null });
+    broadcast(room);
+    reply(cb, { ok: true });
+  });
+
+  socket.on("mafiaVote", ({ targetId } = {}, cb) => {
+    const ctx = playerCtx(socket);
+    if (!ctx || ctx.room.phase !== "night" || ctx.me.role.team !== "mafia") return reply(cb, NO);
+    if (!validTarget(ctx.room, targetId)) return reply(cb, { error: "اختار لاعب لسا باللعبة." });
+    ctx.room.mafia.votes.set(ctx.me.id, targetId);
+    broadcast(ctx.room);
+    reply(cb, { ok: true });
+  });
+
+  socket.on("mafiaChat", ({ text } = {}, cb) => {
+    const ctx = playerCtx(socket);
+    if (!ctx || ctx.me.role.team !== "mafia") return reply(cb, NO);
+    text = clean(text, 200);
+    if (!text) return reply(cb, { ok: true });
+    const chat = ctx.room.mafia.chat;
+    chat.push({ from: ctx.me.id, text });
+    if (chat.length > 40) chat.splice(0, chat.length - 40);
+    broadcast(ctx.room);
+    reply(cb, { ok: true });
+  });
+
+  socket.on("mafiaSend", ({ targetId } = {}, cb) => {
+    const ctx = playerCtx(socket);
+    if (!ctx || ctx.room.phase !== "night" || ctx.me.role.team !== "mafia") return reply(cb, NO);
+    if (!validTarget(ctx.room, targetId)) return reply(cb, { error: "اختار لاعب لسا باللعبة." });
+    ctx.room.mafia.final = { by: ctx.me.id, targetId };
+    broadcast(ctx.room);
+    reply(cb, { ok: true });
+  });
+
+  socket.on("dayVote", ({ targetId } = {}, cb) => {
+    const ctx = playerCtx(socket);
+    if (!ctx) return reply(cb, { error: "انطردت، ما بتقدر تصوّت." });
+    if (ctx.room.phase !== "vote") return reply(cb, { error: "التصويت مش مفتوح هلأ." });
+    const { room, me } = ctx;
+    if (!targetId) room.votes.delete(me.id);
+    else {
+      if (targetId === me.id) return reply(cb, { error: "ما بتقدر تصوّت على حالك." });
+      if (!validTarget(room, targetId)) return reply(cb, { error: "اختار لاعب لسا باللعبة." });
+      room.votes.set(me.id, targetId);
+    }
     broadcast(room);
     reply(cb, { ok: true });
   });
